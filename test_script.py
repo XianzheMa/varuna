@@ -4,44 +4,58 @@ import torch
 import torch.nn as nn
 from torch.utils.data.distributed import DistributedSampler
 import logging
-from torchvision.models import AlexNet
 import argparse
 from varuna import Varuna, get_varuna_config, get_this_rank_config_varuna, CutPoint
-
+from apex.optimizers import FusedLAMB as apex_optimizer
 # configure basic logging
 logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s', level=logging.INFO)
 
 
 
-class VarunaAlexNet(AlexNet):
-    def __init__(self, num_classes):
-        super().__init__(num_classes=num_classes)
+class VarunaAlexNet(nn.Module):
+    def __init__(self, num_classes, dropout: float = 0.5):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(64, 192, kernel_size=5, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(192, 384, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(384, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+        )
+        self.avgpool = nn.AdaptiveAvgPool2d((6, 6))
+
+        self.classifier = nn.Sequential(
+            nn.Dropout(p=dropout),
+            nn.Linear(256 * 6 * 6, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=dropout),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
+            nn.Linear(4096, num_classes),
+        )
 
         self.loss_fn = nn.CrossEntropyLoss()
 
-        layers = []
 
-        num_features = len(self.features)
-        self.cutpoints = nn.ModuleList([CutPoint() for _ in range(num_features - 1)])
-
-        for i, layer in enumerate(self.features):
-            layers.append(layer)
-            if i < num_features-1:
-                layers.append(self.cutpoints[i])
-
-        layers.append(self.avgpool)
-        layers.append(lambda x: torch.flatten(x, 1))
-        layers.extend(self.classifier)
-
-        self.varuna_layers = layers
-
-
-
+        self.cutpoints = nn.ModuleList([CutPoint() for _ in range(3)])
 
 
     def forward(self, image, label):
-        for layer in self.varuna_layers:
-            image = layer(image)
+        image = self.features(image)
+        image = self.cutpoints[0](image)
+        image = self.avgpool(image)
+        image = self.cutpoints[1](image)
+        image = torch.flatten(image, 1)
+        image = self.classifier(image)
+        image = self.cutpoints[2](image)
         return self.loss_fn(image, label)
 
 
@@ -51,7 +65,7 @@ parser.add_argument('--local_rank', type=int, help='local rank of the current pr
 parser.add_argument('--stage_to_rank_map', default=None, type=str, help="stage to rank map of Varuna model")
 parser.add_argument("--chunk_size", type=int,default=None, help="number of microbatches for pipeline")
 parser.add_argument("--batch-size", type=int, default=None, help="per-process batch size given by varuna")
-
+parser.add_argument('--fp16', action='store_true', default=False, help='use fp16')
 
 args = parser.parse_args()
 
@@ -68,6 +82,8 @@ transform_list = [
     transforms.ToTensor(),
     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
 ]
+if args.fp16:
+    transform_list.append(transforms.ConvertImageDtype(torch.half))
 
 if args.rank == 0:
     trainset = torchvision.datasets.CIFAR10(root='./data',
@@ -96,10 +112,11 @@ model = VarunaAlexNet(num_classes=10)
 pipeline_parallel_size, data_parallel_size = get_varuna_config(args.stage_to_rank_map)
 global_batch_size = args.batch_size * data_parallel_size
 model = Varuna(model, args.stage_to_rank_map, get_batch_fn, global_batch_size,
-               args.chunk_size, fp16=True, device=args.local_rank)
+               args.chunk_size, fp16=args.fp16, device=args.local_rank)
 
 
-optimizer = torch.optim.SGD(model.parameters(), lr=0.00001)
+# this seems to be the only optimizer suitable for fp16 with varuna
+optimizer = apex_optimizer(model.parameters(), lr=0.00001)
 model.set_optimizer(optimizer)
 
 
@@ -111,7 +128,9 @@ trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, 
 
 model.train()
 for step, batch in enumerate(trainloader):
-    optimizer.zero_grad()
+    # important: shouldn't use optimizer.zero_grad() as varuna has special logic
+    model.zero_grad()
+    batch = get_dict_batch(batch, args.local_rank)
     loss, overflow, grad_norm = model.step(batch)
     if not overflow:
         optimizer.step()
