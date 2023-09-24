@@ -1,18 +1,14 @@
-import torchvision.transforms as transforms
-import torchvision
+import os
 import torch
-from model.varuna_gpt import VarunaGPT
+from model.varuna_gpt_model import VarunaGPT
 from utils.pretrain_corpus import HuggingFaceDatasetWrapper
 from utils.tokenizer import build_tokenizer
 from torch.utils.data.distributed import DistributedSampler
-
 import argparse
-from varuna import Varuna, get_varuna_config
-import wandb
+from varuna import Varuna, get_varuna_config, Profiler
 from datasets import load_dataset
 # FIXME: this seems to be the only optimizer suitable for fp16 with varuna; needs investigation
 from apex.optimizers import FusedLAMB as apex_optimizer
-
 
 
 parser = argparse.ArgumentParser('varuna example script')
@@ -31,17 +27,16 @@ parser.add_argument('--vocab_file', type=str, default='./utils/bert-large-cased-
                     help='which tokenizer to use.')
 parser.add_argument('--vocab_extra_ids', type=int, default=0, metavar='N', help='-')
 parser.add_argument('--make_vocab_size_divisible_by', type=int, default=128, metavar='N', help='-')
-parser.add_argument('--fp16', action='store_true', default=False, help='use fp16')
+parser.add_argument('--fp16', action='store_true', help='use fp16')
 parser.add_argument('--seq_length', type=int, default=2048, metavar='N', help='-')
 parser.add_argument('--embedding_dim', type=int, default=2048, metavar='N', help='-')
 parser.add_argument('--num_layers', type=int, default=4, metavar='N', help='-')
 parser.add_argument('--num_heads', type=int, default=16, metavar='N', help='-')
 parser.add_argument('--lr', type=float, default=0.0001, metavar='N', help='-')
-
+parser.add_argument('--profiling', action='store_true', help='enable profiling')
+parser.add_argument('--profile_path', type=str, default='./saved_profiles', help='path to save profiling information')
 args = parser.parse_args()
 
-# if args.rank == 0:
-#     wandb.login()
 
 torch.cuda.set_device(args.local_rank)
 
@@ -55,10 +50,6 @@ tokenizer = build_tokenizer(args)
 hf_dataset = load_dataset('wikitext', 'wikitext-103-v1', split='train')
 trainset = HuggingFaceDatasetWrapper(hf_dataset, tokenizer, args.seq_length)
 
-
-def get_batch_fn(size, device=None):
-    batch = next(iter(torch.utils.data.DataLoader(trainset, batch_size=size)))
-    return get_dict_batch(batch, device)
 
 def get_dict_batch(batch, device=None):
     if device is not None:
@@ -74,17 +65,35 @@ model = VarunaGPT(
     num_heads=args.num_heads,
 )
 
-pipeline_parallel_size, data_parallel_size = get_varuna_config(args.stage_to_rank_map)
-global_batch_size = args.batch_size * data_parallel_size
-model = Varuna(model, args.stage_to_rank_map, get_batch_fn, global_batch_size,
-               args.chunk_size, fp16=args.fp16, device=args.local_rank)
+def get_batch_fn(size, device=None):
+    batch = next(iter(torch.utils.data.DataLoader(trainset, batch_size=size)))
+    return get_dict_batch(batch, device)
+
+
+profiler = None
+if args.profiling:
+    os.makedirs(args.profile_path, exist_ok=True)
+    profiler = Profiler(
+        model, get_batch_fn, fp16=args.fp16, device=args.local_rank,
+        from_cache=True, out_folder=args.profile_path, add_to_existing=True
+    )
+else:
+    pipeline_parallel_size, data_parallel_size = get_varuna_config(args.stage_to_rank_map)
+    global_batch_size = args.batch_size * data_parallel_size
+    model = Varuna(model, args.stage_to_rank_map, get_batch_fn, global_batch_size,
+                   args.chunk_size, fp16=args.fp16, device=args.local_rank)
 
 
 # this seems to be the only optimizer suitable for fp16 with varuna
 optimizer = apex_optimizer(model.parameters(), lr=args.lr)
+if args.profiling:
+    profiler.set_optimizer(optimizer)
+    profiler.profile_all(list(range(1, 25)))
+    exit(0)
+
 model.set_optimizer(optimizer)
 
-
+pipeline_parallel_size, data_parallel_size = get_varuna_config(args.stage_to_rank_map)
 # varuna requires every worker to load data although intermediate ones don't need
 sampler = DistributedSampler(trainset, num_replicas=data_parallel_size, rank=model.rank_within_stage)
 # varuna internally splits a full mini batch to micro batches

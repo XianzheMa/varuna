@@ -353,7 +353,7 @@ class Profiler:
         basemodel = self.model
 
         if self.fp16:
-            assert  loss_scale == 'dynamic' or type(loss) == float, \
+            assert  loss_scale == 'dynamic' or type(loss_scale) == float, \
                     "Loss scale must either be a floating point or the string 'dynamic'"
             
             basemodel, optimizer = amp.initialize(  basemodel, self.optimizer, opt_level=amp_opt_level, 
@@ -433,6 +433,11 @@ class Profiler:
             print("STAGE", self.stage)
             self.trim_model(self.stage, self.stage + 1)
             self.check_unused_parameters(self.dummy_inputs)
+            self.model.to(self.device)
+        else:
+            self.stage = None
+            self.prev_stage = None
+            self.next_stage = None
             self.model.to(self.device)
 
     def restore_orig_model(self):
@@ -610,7 +615,7 @@ class Profiler:
         next_rank = self.rank + 1 if self.rank < dist.get_world_size() - 1 else None
         dtype = torch.float16 if self.fp16 else torch.float32
 
-        if prev_rank is not None and (self.prev_stage not in [-1,self.num_cutpoints]):
+        if prev_rank is not None and (self.prev_stage not in [-1,self.num_cutpoints]) and self.stage is not None:
             prev_cp_name = list(self.input_shapes.keys())[self.prev_stage]
             comm_shape = list(self.input_shapes[prev_cp_name][0])
             indices_to_change = self.shape_indices_to_change[prev_cp_name][0]

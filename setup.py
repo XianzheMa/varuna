@@ -28,7 +28,9 @@ simulate_varuna_path = os.path.join(target_binary_path, "simulate-varuna")
 
 
 cmd = ["g++", "-std=c++11", "generate_schedule.cc", "-o", f"{genschedule_path}"]
+print(f'Installing genschedule at {genschedule_path}', flush=True)
 subprocess.run(cmd, cwd=varuna_dir, check=True)
 tools_dir = os.path.join(this_dir, "tools", "simulator")
 cmd = ["g++","-std=c++11", "simulate-varuna-main.cc", "generate_schedule.cc", "simulate-varuna.cc", "-o", f"{simulate_varuna_path}"]
+print(f'Installing simulate-varuna at {simulate_varuna_path}', flush=True)
 subprocess.run(cmd, cwd=tools_dir, check=True)
