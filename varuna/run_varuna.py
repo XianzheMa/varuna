@@ -51,7 +51,7 @@ def get_launch_cmd_format(args):
     launch_cmd.append(f" -u -m varuna.launcher" \
         +  f" --ngpus_per_server {args.gpus_per_node}  " \
         +  " --node_rank {} --nservers {} --master_addr {}"
-        +  f" --nstages {args.nstages} --batch_size {args.batch_size}" \
+        +  f"{' --nstages ' + str(args.nstages) if args.nstages is not None else ''} --batch_size {args.batch_size}" \
         +  f" --chunk_size {args.chunk_size} --code_dir {args.code_dir}")
     launch_cmd.append(args.training_script)
     launch_cmd.extend(args.training_script_args)
@@ -128,8 +128,8 @@ if __name__ == "__main__":
         print("Empty machine list, nothing to run!")
         exit()
 
-    if any([arg is None for arg in [args.batch_size, args.nstages, args.chunk_size, args.training_script]]):
-        assert args.resume, "Training script, batch size, num of partitions and micro-batch size required!"
+    if any([arg is None for arg in [args.batch_size, args.chunk_size, args.training_script]]):
+        assert args.resume, "Training script, batch size, and micro-batch size required!"
 
     if args.code_dir is None:
         args.code_dir = os.getcwd()

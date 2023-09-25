@@ -7,9 +7,8 @@ import pickle
 class AutoConfig:
 
     def __init__(self, num_gpus, gpus_per_vm, batch_size,
-                profile_folder, gpu_memory_capacity=None, verbose=True, 
+                profile_folder='./saved_profiles', gpu_memory_capacity=None, verbose=True,
                 autofill_missing_compute=False):
-
         self.num_gpus = num_gpus
         self.batch_size = batch_size
         self.gpus_per_vm = gpus_per_vm
@@ -133,7 +132,7 @@ class AutoConfig:
     def read_profile(self, profile_folfder, autofill_missing_compute=False):
         
         self.compute_profile = []
-        self.comm_profile = []
+        self.comm_profile = None
         for i in range(self.num_pstages):
             profile_path = os.path.join(profile_folfder, f"compute-profile-{i}")
             if os.path.exists(profile_path):

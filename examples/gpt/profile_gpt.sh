@@ -1,8 +1,7 @@
 #! /bin/bash
 
 GPUS_PER_NODE=4
-export HF_DATASETS_CACHE=# enter your dataset cache path here
-
+export HF_DATASETS_CACHE=/scratch/xianma/.cache/huggingface/datasets/ # enter your dataset cache path here
 
 python -m varuna.run_varuna --gpus_per_node $GPUS_PER_NODE \
 	--batch_size 288 --nstages 1 --chunk_size 1 \
