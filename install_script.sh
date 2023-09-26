@@ -2,7 +2,7 @@
 
 set -e
 
-git clone https://github.com/XianzheMa/varuna.git
+git clone https://github.com/XianzheMa/varuna.git -b xianzhe/redact_varuna
 git clone https://github.com/NVIDIA/apex.git
 
 cd apex
