@@ -55,12 +55,14 @@ def receiver(recv_rank, recv_shape, recv_times, dtype):
         if recv_handles.qsize() > 4:
             handle, start_time = recv_handles.get()
             handle.wait()
-            recv_times.append(time.time() - start_time)
+            # convert seconds to microseconds
+            recv_times.append((time.time() - start_time) * 1000000)
 
     while not recv_handles.empty():
         handle, start_time = recv_handles.get()
         handle.wait()
-        recv_times.append(time.time() - start_time)
+        # convert seconds to microseconds
+        recv_times.append((time.time() - start_time) * 1000000)
 
     del acts_tensor
     
@@ -76,12 +78,14 @@ def sender(send_rank, send_shape, send_times, dtype):
         if send_handles.qsize() > 4:
             handle, start_time = send_handles.get()
             handle.wait()
-            send_times.append(time.time() - start_time)
+            # convert seconds to microseconds
+            send_times.append((time.time() - start_time) * 1000000)
     
     while not send_handles.empty():
         handle, start_time = send_handles.get()
         handle.wait()
-        send_times.append(time.time() - start_time)
+        # convert seconds to microseconds
+        send_times.append((time.time() - start_time) * 1000000)
 
 class Profiler:
     r"""Module for varuna profiling. Similar to ``Varuna`` class, the model must be 
@@ -520,7 +524,7 @@ class Profiler:
                     comm_times = aggregate_comm_profile[comm_shape][key]
                     if len(comm_times) > 0:
                         avg_time = sum(comm_times)/len(comm_times)
-                        aggregate_comm_profile[comm_shape][key] = avg_time * 1000000
+                        aggregate_comm_profile[comm_shape][key] = avg_time
                         print(f"{comm_shape} {key}: {avg_time}")
                     else:
                         print(f"WARNING: No comm times for size {comm_shape} {key}!")
