@@ -166,7 +166,7 @@ class AutoConfig:
         self.shape_indices_to_change = [shape_indices_to_change[k][0] for k in input_shapes_keys]
         self.num_pstages = len(self.input_shapes) + 1
         if verbose:
-            print(self.num_pstages,"cutpoints")
+            print(f"in total maximally {self.num_pstages} pipeline stages separated by cutpoints")
 
     def get_alr_time(self, dp_size, pp_size):
         if dp_size < 2:
