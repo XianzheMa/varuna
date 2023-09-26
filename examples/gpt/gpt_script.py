@@ -5,6 +5,7 @@ from utils.pretrain_corpus import HuggingFaceDatasetWrapper
 from utils.tokenizer import build_tokenizer
 from torch.utils.data.distributed import DistributedSampler
 import argparse
+import time
 from varuna import Varuna, get_varuna_config, Profiler
 from datasets import load_dataset
 # FIXME: this seems to be the only optimizer suitable for fp16 with varuna; needs investigation
@@ -101,14 +102,25 @@ trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, 
 
 
 model.train()
+running_loss = 0.0
+iter_time = 0.0
+log_interval = 10
 for step, batch in enumerate(trainloader):
     # important: shouldn't use optimizer.zero_grad() as varuna has special logic
+    start = time.time()
     model.zero_grad()
     batch = get_dict_batch(batch, args.local_rank)
     loss, overflow, grad_norm = model.step(batch)
+    end = time.time()
+    iter_time += end - start
+    running_loss += loss
     if not overflow:
         optimizer.step()
-    if step % 10 == 0:
-        print(f"step {step} loss {loss} overflow {overflow} grad_norm {grad_norm}")
+    if step % log_interval == 0:
+        print(f'step {step + 1} loss {running_loss / log_interval}; iter time {iter_time / log_interval}')
+        running_loss = 0.0
+        iter_time = 0.0
+
+
 
 

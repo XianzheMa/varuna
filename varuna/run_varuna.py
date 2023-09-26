@@ -43,8 +43,8 @@ def start_morph_listeners(available_machine_list):
     time.sleep(5)
 
 def kill_morph_listeners():
-    os.system("sudo pkill -f varuna.morph")
-    os.system("sudo pkill -f varuna.catch")
+    os.system("pkill -f varuna.morph")
+    os.system("pkill -f varuna.catch")
 
 def get_launch_cmd_format(args):
     launch_cmd = [sys.executable]
