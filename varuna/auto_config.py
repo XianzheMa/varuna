@@ -44,17 +44,22 @@ class AutoConfig:
                 comm_size = mbs
                 for d in self.input_shapes[cuts_per_stage]:
                     comm_size *= d
+
+                print("comm size", comm_size)
+                send_time = self.comm_profile[comm_size]["send"]
+                long_send_time = self.comm_profile[comm_size]["long_send"]
+                if send_time == -1:
+                    print(f"WARNING: no send time found, {pp_size} partitions")
+                    send_time = 0
+                if long_send_time == -1:
+                    print(f"WARNING: no long send time found, {pp_size} partitions, size {comm_size}, {long_send_time}")
+                    long_send_time = 0
             else:
-                comm_size = 0
-            print("comm size", comm_size)
-            send_time = self.comm_profile[comm_size]["send"]
-            long_send_time = self.comm_profile[comm_size]["long_send"]
-            if send_time == -1:
-                print(f"WARNING: no send time found, {pp_size} partitions")
+                print("when pp_size is 1, there is no communication overhead for pipeline parallelism")
+                print("setting send_time and long_send_time to 0")
                 send_time = 0
-            if long_send_time == -1:
-                print(f"WARNING: no long send time found, {pp_size} partitions, size {comm_size}, {long_send_time}")
                 long_send_time = 0
+
             alr = self.get_alr_time(dp_size, pp_size)
             if alr == -1:
                 print(f"WARNING: no allreduce time found for {pp_size} x {dp_size}")

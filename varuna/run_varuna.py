@@ -170,7 +170,7 @@ if __name__ == "__main__":
         if machine == "127.0.0.1":
             cmd = launch_cmd.split(" ")
             cmd = [x_ for x_ in cmd if x_ != ""]
-            # print("launch cmd is ", cmd)
+            print("launch cmd is ", cmd)
         else:
             cmd = ["ssh"]
             cmd.append(machine)
