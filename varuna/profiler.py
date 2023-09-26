@@ -280,7 +280,7 @@ class Profiler:
                 is_used[key] = True
                 key = key + "." + path[i]
 
-        print("USED MODULES")
+
         for m in is_used:
             if not is_used[m]:
                 path = m.split(".")
@@ -406,8 +406,9 @@ class Profiler:
                 param_size += pstage_to_param_count[i]
             param_sizes.append(param_size)
 
-        print("factors", factors)
-        print("all reduce sizes", param_sizes)
+        if self.rank == 0:
+            print("factors", factors)
+            print("all reduce sizes", param_sizes)
 
         return factors, param_sizes
          
@@ -494,8 +495,9 @@ class Profiler:
                 optimizer.state = collections.defaultdict(dict) # Reset state
                 self.restore_orig_model()
             self.prep_stage(i + 1)
-           
-        print("pre-alr mem",torch.cuda.memory_allocated(self.device))
+
+        if self.rank == 0:
+            print("pre-alr mem",torch.cuda.memory_allocated(self.device))
         self.profile_all_reduce(self.alr_factors, self.alr_sizes)
         if self.rank == 0:
             with open(os.path.join(out_folder, "allred-profile"), "wb") as f:
@@ -736,10 +738,11 @@ class Profiler:
                     dist.all_reduce(oom, group=group)
                     if oom.item():
                         break
- 
-        print("All reduce times")
-        for f in factors:
-            print(f, self.all_reduce_profile[f])
+
+        if self.rank == 0:
+            print("All reduce times")
+            for f in factors:
+                print(f, self.all_reduce_profile[f])
 
     def profile(self, microbatch_sizes, optimizer):
 
@@ -765,7 +768,7 @@ class Profiler:
                     fwd_time *= 1000000; bwd_time *= 1000000; copy_time *= 1000000
                     self.compute_profile[batch_size] = {"fwd": fwd_time, "bwd": bwd_time, \
                                     "copy": copy_time,"max_memory": mem_usage, "acts_size": fwd_act_size }
-                    print(batch_size, fwd_time, bwd_time, copy_time, mem_usage, fwd_act_size)
+                    print(self.rank, batch_size, fwd_time, bwd_time, copy_time, mem_usage, fwd_act_size)
                 except RuntimeError as e:
                     if 'out of memory' in str(e):
                         print("Out of memorryyyy")
