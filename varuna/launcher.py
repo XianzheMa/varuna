@@ -122,7 +122,7 @@ def parse_args():
                         help="The total number of nodes.")
     parser.add_argument("--node_rank", type=int, default=0,
                         help="Rank of node amongst servers.")
-    parser.add_argument("--nstages", type=int, required = True,
+    parser.add_argument("--nstages", type=int, default=None,
                         help="Depth of pipeline (number of stages)")
     parser.add_argument("--batch_size", required=True, type=int,
                         help="Total effective batch size required")

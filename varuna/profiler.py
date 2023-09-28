@@ -55,12 +55,14 @@ def receiver(recv_rank, recv_shape, recv_times, dtype):
         if recv_handles.qsize() > 4:
             handle, start_time = recv_handles.get()
             handle.wait()
-            recv_times.append(time.time() - start_time)
+            # convert seconds to microseconds
+            recv_times.append((time.time() - start_time) * 1000000)
 
     while not recv_handles.empty():
         handle, start_time = recv_handles.get()
         handle.wait()
-        recv_times.append(time.time() - start_time)
+        # convert seconds to microseconds
+        recv_times.append((time.time() - start_time) * 1000000)
 
     del acts_tensor
     
@@ -76,12 +78,14 @@ def sender(send_rank, send_shape, send_times, dtype):
         if send_handles.qsize() > 4:
             handle, start_time = send_handles.get()
             handle.wait()
-            send_times.append(time.time() - start_time)
+            # convert seconds to microseconds
+            send_times.append((time.time() - start_time) * 1000000)
     
     while not send_handles.empty():
         handle, start_time = send_handles.get()
         handle.wait()
-        send_times.append(time.time() - start_time)
+        # convert seconds to microseconds
+        send_times.append((time.time() - start_time) * 1000000)
 
 class Profiler:
     r"""Module for varuna profiling. Similar to ``Varuna`` class, the model must be 
@@ -276,7 +280,7 @@ class Profiler:
                 is_used[key] = True
                 key = key + "." + path[i]
 
-        print("USED MODULES")
+
         for m in is_used:
             if not is_used[m]:
                 path = m.split(".")
@@ -353,7 +357,7 @@ class Profiler:
         basemodel = self.model
 
         if self.fp16:
-            assert  loss_scale == 'dynamic' or type(loss) == float, \
+            assert  loss_scale == 'dynamic' or type(loss_scale) == float, \
                     "Loss scale must either be a floating point or the string 'dynamic'"
             
             basemodel, optimizer = amp.initialize(  basemodel, self.optimizer, opt_level=amp_opt_level, 
@@ -402,8 +406,9 @@ class Profiler:
                 param_size += pstage_to_param_count[i]
             param_sizes.append(param_size)
 
-        print("factors", factors)
-        print("all reduce sizes", param_sizes)
+        if self.rank == 0:
+            print("factors", factors)
+            print("all reduce sizes", param_sizes)
 
         return factors, param_sizes
          
@@ -433,6 +438,11 @@ class Profiler:
             print("STAGE", self.stage)
             self.trim_model(self.stage, self.stage + 1)
             self.check_unused_parameters(self.dummy_inputs)
+            self.model.to(self.device)
+        else:
+            self.stage = None
+            self.prev_stage = None
+            self.next_stage = None
             self.model.to(self.device)
 
     def restore_orig_model(self):
@@ -485,8 +495,9 @@ class Profiler:
                 optimizer.state = collections.defaultdict(dict) # Reset state
                 self.restore_orig_model()
             self.prep_stage(i + 1)
-           
-        print("pre-alr mem",torch.cuda.memory_allocated(self.device))
+
+        if self.rank == 0:
+            print("pre-alr mem",torch.cuda.memory_allocated(self.device))
         self.profile_all_reduce(self.alr_factors, self.alr_sizes)
         if self.rank == 0:
             with open(os.path.join(out_folder, "allred-profile"), "wb") as f:
@@ -515,7 +526,7 @@ class Profiler:
                     comm_times = aggregate_comm_profile[comm_shape][key]
                     if len(comm_times) > 0:
                         avg_time = sum(comm_times)/len(comm_times)
-                        aggregate_comm_profile[comm_shape][key] = avg_time * 1000000
+                        aggregate_comm_profile[comm_shape][key] = avg_time
                         print(f"{comm_shape} {key}: {avg_time}")
                     else:
                         print(f"WARNING: No comm times for size {comm_shape} {key}!")
@@ -610,7 +621,7 @@ class Profiler:
         next_rank = self.rank + 1 if self.rank < dist.get_world_size() - 1 else None
         dtype = torch.float16 if self.fp16 else torch.float32
 
-        if prev_rank is not None and (self.prev_stage not in [-1,self.num_cutpoints]):
+        if prev_rank is not None and (self.prev_stage not in [-1,self.num_cutpoints]) and self.stage is not None:
             prev_cp_name = list(self.input_shapes.keys())[self.prev_stage]
             comm_shape = list(self.input_shapes[prev_cp_name][0])
             indices_to_change = self.shape_indices_to_change[prev_cp_name][0]
@@ -727,10 +738,11 @@ class Profiler:
                     dist.all_reduce(oom, group=group)
                     if oom.item():
                         break
- 
-        print("All reduce times")
-        for f in factors:
-            print(f, self.all_reduce_profile[f])
+
+        if self.rank == 0:
+            print("All reduce times")
+            for f in factors:
+                print(f, self.all_reduce_profile[f])
 
     def profile(self, microbatch_sizes, optimizer):
 
@@ -756,7 +768,7 @@ class Profiler:
                     fwd_time *= 1000000; bwd_time *= 1000000; copy_time *= 1000000
                     self.compute_profile[batch_size] = {"fwd": fwd_time, "bwd": bwd_time, \
                                     "copy": copy_time,"max_memory": mem_usage, "acts_size": fwd_act_size }
-                    print(batch_size, fwd_time, bwd_time, copy_time, mem_usage, fwd_act_size)
+                    print(self.rank, batch_size, fwd_time, bwd_time, copy_time, mem_usage, fwd_act_size)
                 except RuntimeError as e:
                     if 'out of memory' in str(e):
                         print("Out of memorryyyy")

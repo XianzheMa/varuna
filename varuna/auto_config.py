@@ -7,9 +7,8 @@ import pickle
 class AutoConfig:
 
     def __init__(self, num_gpus, gpus_per_vm, batch_size,
-                profile_folder, gpu_memory_capacity=None, verbose=True, 
+                profile_folder='./saved_profiles', gpu_memory_capacity=None, verbose=True,
                 autofill_missing_compute=False):
-
         self.num_gpus = num_gpus
         self.batch_size = batch_size
         self.gpus_per_vm = gpus_per_vm
@@ -17,7 +16,7 @@ class AutoConfig:
             gpu_memory_capacity = torch.cuda.get_device_properties(0).total_memory
         self.gpu_memory_capacity = gpu_memory_capacity
         
-        self.read_model_structure()
+        self.read_model_structure(verbose=verbose)
         self.read_profile(profile_folder, autofill_missing_compute)
 
         num_stages_candidates = [ i for i in range(1, self.num_pstages) if self.num_pstages % i == 0]
@@ -45,17 +44,22 @@ class AutoConfig:
                 comm_size = mbs
                 for d in self.input_shapes[cuts_per_stage]:
                     comm_size *= d
+
+                print("comm size", comm_size)
+                send_time = self.comm_profile[comm_size]["send"]
+                long_send_time = self.comm_profile[comm_size]["long_send"]
+                if send_time == -1:
+                    print(f"WARNING: no send time found, {pp_size} partitions")
+                    send_time = 0
+                if long_send_time == -1:
+                    print(f"WARNING: no long send time found, {pp_size} partitions, size {comm_size}, {long_send_time}")
+                    long_send_time = 0
             else:
-                comm_size = 0
-            print("comm size", comm_size)
-            send_time = self.comm_profile[comm_size]["send"]
-            long_send_time = self.comm_profile[comm_size]["long_send"]
-            if send_time == -1:
-                print(f"WARNING: no send time found, {pp_size} partitions")
+                print("when pp_size is 1, there is no communication overhead for pipeline parallelism")
+                print("setting send_time and long_send_time to 0")
                 send_time = 0
-            if long_send_time == -1:
-                print(f"WARNING: no long send time found, {pp_size} partitions, size {comm_size}, {long_send_time}")
                 long_send_time = 0
+
             alr = self.get_alr_time(dp_size, pp_size)
             if alr == -1:
                 print(f"WARNING: no allreduce time found for {pp_size} x {dp_size}")
@@ -133,7 +137,7 @@ class AutoConfig:
     def read_profile(self, profile_folfder, autofill_missing_compute=False):
         
         self.compute_profile = []
-        self.comm_profile = []
+        self.comm_profile = None
         for i in range(self.num_pstages):
             profile_path = os.path.join(profile_folfder, f"compute-profile-{i}")
             if os.path.exists(profile_path):
@@ -152,7 +156,7 @@ class AutoConfig:
         with open(os.path.join(profile_folfder, "allred-profile"), "rb") as f:
             self.all_reduce_profile = pickle.load(f)
 
-    def read_model_structure(self):
+    def read_model_structure(self, verbose):
         with open("_tmp_inp_shapes",'rb') as f:
             input_shapes = pickle.load(f)
         input_shapes_keys = list(input_shapes.keys())
@@ -162,7 +166,7 @@ class AutoConfig:
         self.shape_indices_to_change = [shape_indices_to_change[k][0] for k in input_shapes_keys]
         self.num_pstages = len(self.input_shapes) + 1
         if verbose:
-            print(self.num_pstages,"cutpoints")
+            print(f"in total maximally {self.num_pstages} pipeline stages separated by cutpoints")
 
     def get_alr_time(self, dp_size, pp_size):
         if dp_size < 2:

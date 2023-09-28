@@ -83,11 +83,13 @@ class Handler(socketserver.BaseRequestHandler):
         cur_thread = threading.current_thread()
         recv_time = datetime.now()
         print("{} got something from {}: {}".format(recv_time, self.client_address, data), flush=True)
-        
+
+        # sent from run_varuna.py
         if 'is_running?' in data:
             response = bytes("yes", 'ascii')
             self.request.sendall(response)
 
+        # sent from launcher.py
         if 'starting' in data:
             Handler.triggermorph.acquire()
             print("Lock acquired by start:", is_restarting, is_morphing, is_preempting, flush=True)
@@ -124,7 +126,8 @@ class Handler(socketserver.BaseRequestHandler):
                 is_preempting = False
             Handler.triggermorph.release()
             print("Lock released by preempt:", is_restarting, is_morphing, is_preempting)
-        
+
+        # sent from launcher.py in the end
         elif 'checkpoint done' in data:
             Handler.triggermorph.acquire()
             print("Lock acquired by ckpt:", recv_time, is_restarting, is_morphing, is_preempting, flush=True)
@@ -192,6 +195,7 @@ class Handler(socketserver.BaseRequestHandler):
             Handler.triggermorph.release()
             print("Lock released by morph:", is_restarting, is_morphing, is_preempting)
 
+        # this should be no use as progress is sent to heartbeat server
         elif 'progress' in data:
             global progress_iter
             Handler.triggermorph.acquire()

@@ -43,15 +43,15 @@ def start_morph_listeners(available_machine_list):
     time.sleep(5)
 
 def kill_morph_listeners():
-    os.system("sudo pkill -f varuna.morph")
-    os.system("sudo pkill -f varuna.catch")
+    os.system("pkill -f varuna.morph")
+    os.system("pkill -f varuna.catch")
 
 def get_launch_cmd_format(args):
     launch_cmd = [sys.executable]
     launch_cmd.append(f" -u -m varuna.launcher" \
         +  f" --ngpus_per_server {args.gpus_per_node}  " \
         +  " --node_rank {} --nservers {} --master_addr {}"
-        +  f" --nstages {args.nstages} --batch_size {args.batch_size}" \
+        +  f"{' --nstages ' + str(args.nstages) if args.nstages is not None else ''} --batch_size {args.batch_size}" \
         +  f" --chunk_size {args.chunk_size} --code_dir {args.code_dir}")
     launch_cmd.append(args.training_script)
     launch_cmd.extend(args.training_script_args)
@@ -128,8 +128,8 @@ if __name__ == "__main__":
         print("Empty machine list, nothing to run!")
         exit()
 
-    if any([arg is None for arg in [args.batch_size, args.nstages, args.chunk_size, args.training_script]]):
-        assert args.resume, "Training script, batch size, num of partitions and micro-batch size required!"
+    if any([arg is None for arg in [args.batch_size, args.chunk_size, args.training_script]]):
+        assert args.resume, "Training script, batch size, and micro-batch size required!"
 
     if args.code_dir is None:
         args.code_dir = os.getcwd()
@@ -170,7 +170,7 @@ if __name__ == "__main__":
         if machine == "127.0.0.1":
             cmd = launch_cmd.split(" ")
             cmd = [x_ for x_ in cmd if x_ != ""]
-            # print("launch cmd is ", cmd)
+            print("launch cmd is ", cmd)
         else:
             cmd = ["ssh"]
             cmd.append(machine)
