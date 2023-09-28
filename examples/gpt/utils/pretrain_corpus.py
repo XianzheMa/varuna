@@ -1,3 +1,4 @@
+# adapted from https://github.com/eth-easl/elastic-spot-ml/blob/master/sailor/datasets/pretrain_corpus.py
 import torch
 from torch.utils.data import Dataset
 

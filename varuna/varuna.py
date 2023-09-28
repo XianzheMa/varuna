@@ -23,7 +23,7 @@ from .checkpoint import write_varuna_checkpoint, get_local_ckpt_tracker, \
 import gc
 import numpy
 import socket
-
+from .bucket_client import BucketClient
 import math, shutil
 import os, sys
 import time
@@ -33,7 +33,8 @@ Module = nn.Module
 log_verbose = False
 
 TASK = ["fwd", "rec", "bwd"]
-    
+# read BUCKE_NAME from env
+BUCKET_NAME = os.environ.get('BUCKET_NAME', None)
 class Varuna(Module):
     r"""Module to implement varuna training. The model must be wrapped in an instance 
     of ``Varuna`` before training. This should be done before optimizer creation and the 
@@ -306,8 +307,8 @@ class Varuna(Module):
             message = "slowcheck {} {} {} {}".\
                         format(self.current_step, self.stage, self.rank_within_stage,fwd_time)
             utils.heartbeat(message, self.manager_ip, self.manager_port)
-            
-                    
+
+
         if self.rank == 0 and self.iteration%5==0:
             message = "progress {} {}".format(batch_time, self.iteration)
             utils.heartbeat(message, self.manager_ip, self.manager_port)
@@ -488,10 +489,10 @@ class Varuna(Module):
         :type check_complete: bool, optional 
         """
         cp_dir_name = os.path.join(global_store, "varuna_ckpt_{}".format(iteration))
-
+        client = BucketClient(bucket_name=BUCKET_NAME) if BUCKET_NAME is not None else None
         if check_complete:
             num_parameter_instances = len(self.param_name_to_pstage)
-            params_written = num_params_written(global_store, iteration)
+            params_written = num_params_written(global_store, iteration, client=client)
             if params_written < num_parameter_instances:
                 prev_ckpt = get_prev_checkpoint(global_store, iteration)
                 with open(get_local_ckpt_tracker(self.local_rank),"w") as f:
@@ -501,14 +502,14 @@ class Varuna(Module):
         total_num_pstages = self.partitioned_model.num_cutpoints + 1
 
         model_state_dict = load_varuna_checkpoint(self.stage, self.partitions, 
-                                                total_num_pstages,  cp_dir_name)
+                                                total_num_pstages,  cp_dir_name, client=client)
 
         # TODO: this should be strict and should raise error in the lm_head_weight case
         self.partitioned_model.module.load_state_dict(model_state_dict)
 
         load_varuna_optimizer(self.optimizer, self.stage, self.partitions, 
                               total_num_pstages, self.parameter_names, 
-                              cp_dir_name, device=self.device)
+                              cp_dir_name, device=self.device, client=client)
         # reload master params for mixed precision
         if self.fp16:
             for p in amp.master_params(self.optimizer):

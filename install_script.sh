@@ -2,7 +2,8 @@
 
 set -e
 
-git clone https://github.com/XianzheMa/varuna.git -b xianzhe/redact_varuna
+# the script to install varuna in a local environment (e.g. personal computer or a server)
+git clone https://github.com/XianzheMa/varuna.git
 git clone https://github.com/NVIDIA/apex.git
 
 cd apex

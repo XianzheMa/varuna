@@ -30,6 +30,10 @@ cmd = ["g++", "-std=c++11", "generate_schedule.cc", "-o", f"{genschedule_path}"]
 print(f'Installing genschedule at {genschedule_path}', flush=True)
 subprocess.run(cmd, cwd=varuna_dir, check=True)
 
+target_kill_all_path = os.path.join(target_varuna_path, "kill_all.sh")
+subprocess.run(["cp", "kill_all.sh", target_kill_all_path], cwd=varuna_dir, check=True)
+subprocess.run(["chmod", "+x", target_kill_all_path], check=True)
+
 tools_dir = os.path.join(this_dir, "tools", "simulator")
 target_simulate_varuna_dir = os.path.join(target_this_dir, "tools", "simulator")
 os.makedirs(target_simulate_varuna_dir, exist_ok=True)

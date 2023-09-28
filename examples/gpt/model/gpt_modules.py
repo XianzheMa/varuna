@@ -1,8 +1,11 @@
+# adapt from https://github.com/DS3Lab/Decentralized_FM_alpha/blob/main/modules/gpt_modules.py
+
 import math
 import torch
 from torch import nn
 from torch.nn import functional
 
+# this function is adapted from https://github.com/DS3Lab/CocktailSGD/blob/master/modules/utils.py
 def gpt_loss_func(input, target):
     lm_logits, labels = input, target
     shift_logits = lm_logits[..., :-1, :].contiguous()

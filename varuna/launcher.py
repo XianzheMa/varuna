@@ -202,6 +202,10 @@ if __name__ == "__main__":
             "your application as needed. \n"
             "*****************************************".format(current_env["OMP_NUM_THREADS"]))
 
+    # this is so that when auto-deciding the number of stages and chunk size via AutoConfig,
+    # we need to read model structure files (_tmp_*). They are stored within args.code_dir, which is the working directory
+    # to launch the training script. So we need to change the working directory to args.code_dir.
+    os.chdir(args.code_dir)
     dist_world_size, stage_to_rank_map, ranks_in_server, \
         total_batch_size, gpus_per_stage = calculate_config(args)
 
