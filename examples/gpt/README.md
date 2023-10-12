@@ -21,3 +21,17 @@ once resource changes according to the trace file. We consolidated all changes t
 
 `morph_server` is responsible for many tasks but most of them are broken.
 For our purposes we do not use it.
+
+## Miscellaneous
+
+1. [kill_all.sh](varuna/kill_all.sh) is a script to kill all processes on all nodes. It is used by `trace_catch_all.py` / 
+`catch_all.py` to kill all processes when the program exits. Originally what's killed is `varuna.launcher` but I found
+the processes spawned by `varuna_launcher` (the actual training script, in our case [gpt_script.py](examples/gpt/gpt_script.py))
+are not killed. So I changed it to kill the actual training script by name `gpt_script`.
+
+    If you create a new training script, you need to change the name in `kill_all.sh` accordingly.
+
+2. The original varuna is meant to run directly on a set of VMs. I made it also possible
+to run on a kubernetes cluster, with each worker node / the manager as a pod. In `examples/gpt/run/` there are sample k8s resource
+yaml files. To run on k8s, you need to set `run_varuna.py`'s `--env` arg as `k8s`, which defaults to `vm`.
+

@@ -51,6 +51,7 @@ parser.add_argument('--log_every', type=int, default=10, help='log every n steps
 parser.add_argument('--remote_ckpt_path', type=str, default='varuna/gpt', help='remote checkpoint path')
 parser.add_argument('--local_ckpt_path', type=str, default='temp_ckpt', help='temporary local checkpoint path')
 parser.add_argument('--num_iters', type=int, default=0, help='number of iterations to train in total; 0 to run infinitely')
+parser.add_argument('--num_data_workers', type=int, default=2, help='number of data loading workers')
 parser.add_argument('--times', type=int, default=0, help='the n-th time to run the script')
 args = parser.parse_args()
 
@@ -139,7 +140,7 @@ logging.info(f'pipeline parallel size {pipeline_parallel_size}, data parallel si
 sampler = DistributedSampler(trainset, num_replicas=data_parallel_size, rank=model.rank_within_stage)
 # varuna internally splits a full mini batch to micro batches
 # because sailor also has 2 data loading workers
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, sampler=sampler, num_workers=2)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, sampler=sampler, num_workers=args.num_data_workers)
 trainloader = RepeatingLoader(trainloader)
 
 model.train()
