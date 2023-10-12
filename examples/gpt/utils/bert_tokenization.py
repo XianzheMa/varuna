@@ -1,3 +1,4 @@
+# adapt from https://github.com/DS3Lab/Decentralized_FM_alpha/blob/main/task_datasets/bert_tokenization.py
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function

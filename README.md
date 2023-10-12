@@ -22,6 +22,10 @@ To install, clone this repository, cd into it and run
 ~~~~
 python setup.py install
 ~~~~
+
+To work with PyTorch >= 2.0, one further change has to be made to apex. All changes in `apex.patch` and this further change are consolidated in
+`apex_new.patch`. The external submodule in `/external/apex` contains the apex code with these changes applied from `apex_new.patch`.
+
 ## Running
 
 Varuna trains large DNN models by parallelising them into sequential pipeline stages and data parallel replicas across a set of GPUs. These methods are called pipeline parallelism and data parallelism respectively.

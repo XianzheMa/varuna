@@ -12,10 +12,13 @@ try:
     import amp_C, apex_C
 except:
     pass
+from .bucket_client import BucketClient
 opt_state_format = "opt-state-{}"
 params_format = "opt-fp32-params-{}"
 MARKERS = "markers"
 opt_extra_state_name = "opt-common-state"
+# read bucket name from env
+BUCKET_NAME = os.environ.get('BUCKET_NAME', None)
 
 """ Writes a varuna checkpoint with model parameters, optimizer state etc. 
     Each checkpoint is a directory, written under the given path.
@@ -29,7 +32,8 @@ opt_extra_state_name = "opt-common-state"
     shard: bool, whether to shard checkpoint writes over data parallel workers as well. Speeds up checkpoint 
 """
 def write_varuna_checkpoint(varuna_model, global_store, step, tempdir=None, shard=False):
-
+    # FIXME: temporarily do not support directly writing to bucket storage,
+    #  i.e. when global_store is set and BUCKET_NAME is set, tempdir should be set as well
     optimizer = varuna_model.optimizer
     cp_time = time.time()
     mv_futures = []
@@ -45,7 +49,8 @@ def write_varuna_checkpoint(varuna_model, global_store, step, tempdir=None, shar
     pstages = range(cuts_per_stage * stage, (stage+1)* cuts_per_stage)
     data_depth = len(varuna_model.stage_to_rank_map[stage])
 
-    cp_dir_name, marker_dir_name = create_ckpt_dirs(global_store, tempdir, rank, local_rank, step)
+    client = BucketClient(bucket_name=BUCKET_NAME) if BUCKET_NAME is not None else None
+    cp_dir_name, marker_dir_name = create_ckpt_dirs(global_store, tempdir, rank, local_rank, step, client=client)
         
     ordered_params = list(varuna_model.partitioned_model.module.parameters())   
     if varuna_model.fp16:
@@ -53,11 +58,11 @@ def write_varuna_checkpoint(varuna_model, global_store, step, tempdir=None, shar
     mv_futures_, param_count = checkpoint_model_params(ordered_params, 
                                         rank_within_stage, shard, data_depth,
                                         pstages, parameter_names, param_name_to_pstage, 
-                                        cp_dir_name, tempdir = tempdir, executor = executor)
+                                        cp_dir_name, tempdir = tempdir, executor = executor, client=client)
     mv_futures.extend( mv_futures_ )
     mv_futures_, state_count = checkpoint_opt_state(optimizer, rank_within_stage, shard, data_depth,
                                             pstages, parameter_names, param_name_to_pstage, 
-                                            cp_dir_name, tempdir = tempdir, executor = executor)
+                                            cp_dir_name, tempdir = tempdir, executor = executor, client=client)
     mv_futures.extend( mv_futures_ )
     # assert param_count == state_count, \
     #     f"Checkpoint error! rank {rank} wrote {param_count} params but {state_count} opt states"
@@ -65,7 +70,17 @@ def write_varuna_checkpoint(varuna_model, global_store, step, tempdir=None, shar
     # optimizer extra state
     extra_state = optimizer.state_dict()
     extra_state["state"] = {}
-    torch.save(extra_state, os.path.join(cp_dir_name, opt_extra_state_name))
+    if client is None:
+        torch.save(extra_state, os.path.join(cp_dir_name, opt_extra_state_name))
+    elif tempdir is not None:
+        if rank == 0:
+            temp_name =  os.path.join(tempdir, opt_extra_state_name)
+            torch.save(extra_state, temp_name)
+            mv_futures.append(executor.submit(client.upload_file, temp_name, os.path.join(cp_dir_name, opt_extra_state_name)))
+        else:
+            # append a no-op future
+            mv_futures.append(executor.submit(lambda: None))
+
            
     cp_time = time.time() - cp_time
     print("Opt ckpt time", cp_time)
@@ -73,14 +88,14 @@ def write_varuna_checkpoint(varuna_model, global_store, step, tempdir=None, shar
     ckpt_future = None
     if tempdir is not None and len(mv_futures) > 0:
         ckpt_future = executor.submit(future_on_futures, mv_futures, rank, local_rank, 
-                        step, global_store, param_count)
+                        step, global_store, param_count, client)
         executor.shutdown(wait = False)
     else:
         local_tracker = get_local_ckpt_tracker(local_rank)
         with open(local_tracker,"w") as f:
             f.write(str(step))
         global_tracker = get_global_ckpt_tracker(global_store, rank, step)
-        with open(global_tracker,"w") as f:
+        with open(global_tracker, "w") as f:
             f.write(str(param_count))
 
     return ckpt_future
@@ -88,7 +103,7 @@ def write_varuna_checkpoint(varuna_model, global_store, step, tempdir=None, shar
 
 def checkpoint_opt_state(optimizer, rank_within_stage, shard, data_depth,
                 pstages, parameter_names, param_name_to_pstage, 
-                cp_dir_name, tempdir = None, executor = None):
+                cp_dir_name, tempdir = None, executor = None, client = None):
     data_depth = data_depth if shard else 1 
     mv_futures = []
     state_count = 0
@@ -123,7 +138,10 @@ def checkpoint_opt_state(optimizer, rank_within_stage, shard, data_depth,
                 if data_depth > 1:
                     temp_name += "_" + str(rank_within_stage)
                 torch.save(pstage_state_dicts[i], temp_name)
-                mv_futures.append(executor.submit(shutil.move, temp_name, cp_name))
+                if client is None:
+                    mv_futures.append(executor.submit(shutil.move, temp_name, cp_name))
+                else:
+                    mv_futures.append(executor.submit(client.upload_file, temp_name, cp_name))
             else:
                 torch.save(pstage_state_dicts[i], cp_name)
             
@@ -133,7 +151,7 @@ def checkpoint_opt_state(optimizer, rank_within_stage, shard, data_depth,
 
 def checkpoint_model_params(ordered_params, rank_within_stage, shard, data_depth,
                 pstages, parameter_names, param_name_to_pstage, 
-                cp_dir_name, tempdir = None, executor = None):
+                cp_dir_name, tempdir = None, executor = None, client = None):
     data_depth = data_depth if shard else 1 
     mv_futures = []
     param_count = 0
@@ -167,26 +185,31 @@ def checkpoint_model_params(ordered_params, rank_within_stage, shard, data_depth
                 if data_depth > 1:
                     temp_name += "_" + str(rank_within_stage)
                 torch.save(pstage_state_dicts[i], temp_name)
-                mv_futures.append(executor.submit(shutil.move, temp_name, cp_name))
+                if client is None:
+                    mv_futures.append(executor.submit(shutil.move, temp_name, cp_name))
+                else:
+                    mv_futures.append(executor.submit(client.upload_file, temp_name, cp_name))
             else:
                 torch.save(pstage_state_dicts[i], cp_name)
     
     return mv_futures, param_count
 
 
-def create_ckpt_dirs(global_store, tempdir, rank, local_rank, step):
+def create_ckpt_dirs(global_store, tempdir, rank, local_rank, step, client=None):
     cp_dir_name = os.path.join(global_store, "varuna_ckpt_{}".format(step))
     marker_dir_name = os.path.join(cp_dir_name, MARKERS)
-    if rank == 0 and (not os.path.exists(cp_dir_name)):
+    # bucket storage has no concept of directories
+    if rank == 0 and (not os.path.exists(cp_dir_name)) and client is None:
         os.makedirs(cp_dir_name)
         os.makedirs(marker_dir_name)
     if local_rank == 0 and (tempdir is not None) and (not os.path.exists(tempdir)):
         os.makedirs(tempdir)
-    while not os.path.exists(marker_dir_name):
+    while client is None and not os.path.exists(marker_dir_name):
         pass
     return cp_dir_name, marker_dir_name
 
-def future_on_futures(mv_futures, rank, local_rank, iteration, global_store, param_count):
+def future_on_futures(mv_futures, rank, local_rank, iteration, global_store, param_count, client: BucketClient=None):
+    print("waiting for {} futures".format(len(mv_futures)))
     done, notdone = concurrent.futures.wait(mv_futures)
     print("{} futures done!".format(len(done)))
     error = False
@@ -199,37 +222,64 @@ def future_on_futures(mv_futures, rank, local_rank, iteration, global_store, par
         except Exception as exc:
             print('future generated an exception: %s' % ( exc))
             error = True
-    if not error:
+
+    if not error and client is None:
         local_tracker = get_local_ckpt_tracker(local_rank)
-        with open(local_tracker,"w") as f:
+        with open(local_tracker, "w") as f:
             f.write(str(iteration))
         global_tracker = get_global_ckpt_tracker(global_store, rank, iteration)
-        with open(global_tracker,"w") as f:
+        with open(global_tracker, "w") as f:
             f.write(str(param_count))
 
+    if error and client is not None:
+        raise Exception("Error in checkpoint upload")
+
+
 def load_varuna_checkpoint(my_stage, num_stages, total_num_pstages, common_store, 
-                            pstages_to_read = None, device = 'cpu'):
+                            pstages_to_read = None, device = 'cpu', client: BucketClient=None):
     state_dict = {}
     if pstages_to_read is None:
         stages_per_worker = total_num_pstages // num_stages
         pstages_to_read = range(stages_per_worker * my_stage, stages_per_worker * (my_stage + 1) )
     for i in pstages_to_read:
         cp_file = os.path.join(common_store, params_format.format(i))
-        if os.path.exists(cp_file):
-            state_dict_ = torch.load(cp_file,map_location=device)
-            state_dict.update(state_dict_)
-        else:
-            shards = [os.path.join(common_store,f) for f in os.listdir(common_store) \
-                        if f.startswith(params_format.format(i) + "_")]
-            for cp_file in shards:
+        if client is None:
+            if os.path.exists(cp_file):
                 state_dict_ = torch.load(cp_file,map_location=device)
                 state_dict.update(state_dict_)
+            else:
+                shards = [os.path.join(common_store,f) for f in os.listdir(common_store) \
+                            if f.startswith(params_format.format(i) + "_")]
+                for cp_file in shards:
+                    state_dict_ = torch.load(cp_file,map_location=device)
+                    state_dict.update(state_dict_)
+        else:
+            # if the blob exists
+            if client.bucket.get_blob(cp_file) is not None:
+                print(f'found {cp_file} remotely')
+                temp_path = f'/tmp/__gcloud_bc_temp_{params_format.format(i)}'
+                client.download_file(temp_path, cp_file)
+                state_dict_ = torch.load(temp_path,map_location=device)
+                state_dict.update(state_dict_)
+            else:
+                print(f'not found {cp_file} remotely; merge from remote')
+                shards = []
+                for blob in client.bucket.list_blobs(prefix=common_store):
+                    simple_name = blob.name.split('/')[-1]
+                    if simple_name.startswith(params_format.format(i) + "_"):
+                        shards.append(blob.name)
+
+                for cp_file in shards:
+                    temp_path = f'/tmp/__gcloud_bc_temp_{params_format.format(i)}'
+                    client.download_file(temp_path, cp_file)
+                    state_dict_ = torch.load(temp_path,map_location=device)
+                    state_dict.update(state_dict_)
     return state_dict
 
 
 
 def load_varuna_optimizer(optimizer, my_stage, num_stages, total_num_pstages, parameter_names, \
-                        common_store, pstages_to_read = None, device='cpu'):
+                        common_store, pstages_to_read = None, device='cpu', client: BucketClient=None):
     if pstages_to_read is None:
         stages_per_worker = total_num_pstages // num_stages
         pstages_to_read = range(stages_per_worker * my_stage, stages_per_worker * (my_stage + 1) )
@@ -237,15 +287,37 @@ def load_varuna_optimizer(optimizer, my_stage, num_stages, total_num_pstages, pa
     opt_state = {}
     for i in pstages_to_read:
         f = os.path.join(common_store, opt_state_format.format(i))
-        if os.path.exists(f):
-            state_ = torch.load(f,map_location=device)
-            opt_state.update(state_)
-        else:
-            shards = [os.path.join(common_store,f) for f in os.listdir(common_store) \
-                        if f.startswith(opt_state_format.format(i) + "_")]
-            for filename in shards:
-                state_ = torch.load(filename,map_location=device)
+        if client is None:
+            if os.path.exists(f):
+                state_ = torch.load(f,map_location=device)
                 opt_state.update(state_)
+            else:
+                shards = [os.path.join(common_store,f) for f in os.listdir(common_store) \
+                            if f.startswith(opt_state_format.format(i) + "_")]
+                for filename in shards:
+                    state_ = torch.load(filename,map_location=device)
+                    opt_state.update(state_)
+        else:
+            # if the blob exists
+            if client.bucket.get_blob(f) is not None:
+                print(f'found {f} remotely')
+                temp_path = f'/tmp/__gcloud_bc_temp_{opt_state_format.format(i)}'
+                client.download_file(temp_path, f)
+                state_ = torch.load(temp_path,map_location=device)
+                opt_state.update(state_)
+            else:
+                print(f'not found {f} remotely; merge from remote')
+                shards = []
+                for blob in client.bucket.list_blobs(prefix=common_store):
+                    simple_name = blob.name.split('/')[-1]
+                    if simple_name.startswith(opt_state_format.format(i) + "_"):
+                        shards.append(blob.name)
+
+                for filename in shards:
+                    temp_path = f'/tmp/__gcloud_bc_temp_{opt_state_format.format(i)}'
+                    client.download_file(temp_path, filename)
+                    state_ = torch.load(temp_path,map_location=device)
+                    opt_state.update(state_)
                 
     for p in amp.master_params(optimizer):
         name = parameter_names[p]
@@ -253,8 +325,14 @@ def load_varuna_optimizer(optimizer, my_stage, num_stages, total_num_pstages, pa
             optimizer.state[p] = opt_state[name]
         else:
             print(f"checkpoint didn't find state for {name}")
-    
-    extra_state = torch.load(os.path.join(common_store, opt_extra_state_name))
+
+    extra_state_path = os.path.join(common_store, opt_extra_state_name)
+    if client is None:
+        extra_state = torch.load(extra_state_path)
+    else:
+        temp_path = f'/tmp/__gcloud_bc_temp_{opt_extra_state_name}'
+        client.download_file(temp_path, extra_state_path)
+        extra_state = torch.load(temp_path)
     for i,g in enumerate(extra_state['param_groups']):
         for k,v in g.items():
             if k != 'params':
@@ -268,13 +346,19 @@ def get_global_ckpt_tracker(global_store, rank, step):
     return os.path.join(global_store, "varuna_ckpt_{}".format(step),
                             MARKERS, f"complete_{rank}.txt")
 
-def num_params_written(global_store, step):
+def num_params_written(global_store, step, client: BucketClient=None):
     marker_dir = os.path.join(global_store, f"varuna_ckpt_{step}", MARKERS)
-    markers = os.listdir(marker_dir)
-    complete = 0
-    for m in markers:
-        with open(os.path.join(marker_dir, m),"r") as f:
-            complete += int(f.read())
+    if client is None:
+        markers = os.listdir(marker_dir)
+        complete = 0
+        for m in markers:
+            with open(os.path.join(marker_dir, m),"r") as f:
+                complete += int(f.read())
+    else:
+        blobs = client.bucket.list_blobs(prefix=marker_dir)
+        complete = 0
+        for blob in blobs:
+            complete += int(client.read_from_remote(blob.name))
     return complete
 
 def get_prev_checkpoint(global_store, step):

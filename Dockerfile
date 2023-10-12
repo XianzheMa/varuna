@@ -13,6 +13,17 @@ RUN cd apex \
     && cd .. \
     && rm -rf apex
 
+RUN apt install curl lsof vim -y --no-install-recommends \
+    && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+    && install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+
+RUN pip install wandb \
+    && pip install kubernetes==21.7.0 \
+    && pip install datasets \
+    && pip install google-cloud-storage==2.10.0
+
+
 COPY ./varuna ./varuna
 COPY ./setup.py ./setup.py
 COPY ./tools ./tools
